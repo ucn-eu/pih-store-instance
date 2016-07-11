@@ -1,7 +1,0 @@
-PKG mirage
-PKG mirage-logs
-PKG cohttp.lwt
-PKG ezjsonm
-PKG astring
-
-B ..
