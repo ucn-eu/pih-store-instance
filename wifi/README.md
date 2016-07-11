@@ -1,11 +1,11 @@
 In order to have a data store running locally (assuming that mirage tool stack is installed):
 
-1. put server certificates under tls/
-2. pin and install a package: ucn-eu/pih-store
+* put server certificates under tls/
+* pin and install a package: ucn-eu/pih-store
 ```
 opam pin add pih-store https://github.com/ucn-eu/pih-store.git
 ```
-3. then from a terminal, type
+* then from a terminal, type
 ```
 mirage configure
 mirage build
