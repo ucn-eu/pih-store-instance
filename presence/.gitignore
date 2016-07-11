@@ -1,0 +1,11 @@
+.merlin
+Makefile
+_build
+key_gen.ml
+log
+main.ml
+*.xen
+*.x[e|l]
+*.xl.in
+*_libvirt.xml
+static1.ml*
