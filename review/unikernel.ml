@@ -38,15 +38,15 @@ module Review_Store = struct
   let dispatch store ?src body steps =
     match steps with
     | ["create"; id] ->
-       with_ok_unit (S.create store ?src id body)
+       with_ok_unit (S.create store ?src [id] body)
     | ["read"; id] ->
-       S.read store ?src id
+       S.read store ?src [id]
     | ["update"; id] ->
-       with_ok_unit (S.update store ?src id body)
+       with_ok_unit (S.update store ?src [id] body)
     | ["delete"; id] ->
-       with_ok_unit (S.remove store ?src id)
+       with_ok_unit (S.remove store ?src [id])
     | ["meta"; id] ->
-       S.get_meta store ?src id to_meta
+       S.get_meta store ?src [id] to_meta
     | ["list"] ->
        with_ok_list (S.list store ?src ())
     | _ -> return (Error Not_found)
