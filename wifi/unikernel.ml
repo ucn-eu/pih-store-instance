@@ -47,15 +47,16 @@ module Wifi_Store = struct
   let dispatch store ?src body meth key =
     match meth, key with
     | `GET, key ->
-       let name = List.rev key |> List.hd in
-       if name = "list" then
-         let key = List.rev key |> List.tl |> List.rev in
-         with_ok_list (S.list store ?src ~parent:key ())
-       else if name = "all" then
-         let key = List.rev key |> List.tl |> List.rev in
-         read_list store ?src key
-       else
-         S.read store ?src key
+       Lwt.catch (fun () ->
+         let name = List.rev key |> List.hd in
+         if name = "list" then
+           let key = List.rev key |> List.tl |> List.rev in
+           with_ok_list (S.list store ?src ~parent:key ())
+         else if name = "all" then
+           let key = List.rev key |> List.tl |> List.rev in
+           read_list store ?src key
+         else
+           S.read store ?src key) (fun exn -> return (Error exn))
     | `POST, key ->
        with_ok_unit (S.update store ?src key body)
     | _ -> return (Error Not_found)
@@ -66,14 +67,25 @@ end
 
 
 module Dispatcher
-    (Http: Cohttp_lwt.Server) = struct
+    (Http: Cohttp_lwt.Server)
+    (FS: KV_RO) = struct
 
-  let headers = Cohttp.Header.init_with
-    "Strict-Transport-Security" "max-age=31536000"
+  let headers = Cohttp.Header.of_list [
+    "Strict-Transport-Security", "max-age=31536000";
+    "Access-Control-Allow-Origin", "*"]
   let empty_body = Cohttp_lwt_body.empty
 
+  let file_dispatcher fs name =
+    let name = if name = "/" then "/index.html" else name in
+    FS.size fs name >>= function
+    | `Error (FS.Unknown_key _) -> return (Error Not_found)
+    | `Ok size ->
+       FS.read fs name 0 (Int64.to_int size) >>= function
+       | `Error (FS.Unknown_key _) -> return (Error Not_found)
+       | `Ok bufs -> return (Ok (Cstruct.copyv bufs))
+
   (* TODO: get src information *)
-  let wifi_dispatcher store ?src uri req body =
+  let wifi_dispatcher fs store ?src uri req body =
     let p = Uri.path uri in
     let steps = Astring.String.cuts ~empty:false ~sep:"/" p in
     let meth = Cohttp.Request.meth req in
@@ -88,8 +100,13 @@ module Dispatcher
        let body = Cohttp_lwt_body.of_string json in
        Http.respond ~headers ~status:`OK ~body ()
     | Error e ->
-       let body = Printexc.to_string e |> Cohttp_lwt_body.of_string in
-       Http.respond ~headers ~status:`Not_found ~body ()
+       file_dispatcher fs p >>= function
+       | Error e ->
+          let body = Printexc.to_string e |> Cohttp_lwt_body.of_string in
+          Http.respond ~headers ~status:`Not_found ~body ()
+       | Ok f ->
+          let body = Cohttp_lwt_body.of_string f in
+          Http.respond ~headers ~status:`OK ~body ()
 
 
   let redirect ?src uri _req _body =
@@ -119,12 +136,13 @@ end
 
 module Main
      (Http: Cohttp_lwt.Server)
+     (FS: KV_RO)
      (Keys: KV_RO)
      (Clock: V1.CLOCK) = struct
 
   module X509 = Tls_mirage.X509(Keys)(Clock)
   module Logs_reporter = Mirage_logs.Make(Clock)
-  module D = Dispatcher(Http)
+  module D = Dispatcher(Http)(FS)
 
   let time () = Clock.(
     let t = time () |> gmtime in
@@ -136,7 +154,7 @@ module Main
     let conf = Tls.Config.server ~certificates:(`Single cert) () in
     Lwt.return conf
 
-  let start http keys _clock =
+  let start http fs keys _clock =
     Logs.(set_level (Some Info));
     let console_threshold src =
       if src = log_src then Logs.Info
@@ -154,7 +172,7 @@ module Main
     let tls = `TLS (cfg, tcp) in
 
     Lwt.join [
-      http tls @@ D.serve (D.wifi_dispatcher s);
+      http tls @@ D.serve (D.wifi_dispatcher fs s);
       http (`TCP http_port) @@ D.serve D.redirect
     ]
 end

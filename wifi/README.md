@@ -18,5 +18,10 @@ right now, the store take no assumption about the orgnisation of data in the sto
 
 * `GET /path/to/your/data`      should return your data under the path
 * `GET /path/of/directory/all`  concatenate all the data under the directory(not recursive), return them as a json array, make sure they are right formatted json data, otherwise...
-* `GET /path/of/directory/list`  list all the data files under the directory 
+* `GET /path/of/directory/list`  list all the data files under the directory
 * `POST /path/to/your/data`     create or update the data
+
+
+*Serving static files
+put all the files under the the directory files/
+say, if there is a file files/js/foo.js, a GET request should get it for you: `GET /js/foo.js`

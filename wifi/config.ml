@@ -6,12 +6,13 @@ let stack =
   | _ -> socket_stackv4 default_console [Ipaddr.V4.any]
 
 let keys = crunch "tls"
+let fs = crunch "files"
 
 let https = http_server @@ conduit_direct ~tls:true stack
 
 let main =
   foreign "Unikernel.Main"
-    (http @-> kv_ro @-> clock @-> job)
+    (http @-> kv_ro @-> kv_ro @-> clock @-> job)
 
 let tracing = mprof_trace ~size:1000000 ()
 
@@ -22,5 +23,5 @@ let () =
       "pih-store"
     ] in
   register ~libraries "wifi" [
-    main $ https $ keys $ default_clock
+    main $ https $ fs $ keys $ default_clock
   ]
