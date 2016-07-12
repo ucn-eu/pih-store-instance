@@ -2,8 +2,8 @@ open Mirage
 
 let stack =
   match get_mode () with
-  | `Xen -> generic_stackv4 default_console (netif "0")
-  | _ -> socket_stackv4 default_console [Ipaddr.V4.any]
+  | `Xen -> generic_stackv4 (netif "0")
+  | _ -> socket_stackv4  [Ipaddr.V4.any]
 
 let keys = crunch "tls"
 let fs = crunch "files"

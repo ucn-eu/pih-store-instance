@@ -3,8 +3,8 @@ open Mirage
 let stack =
   let open Key in
   if_impl is_xen
-    (direct_stackv4_with_dhcp default_console tap0)
-    (socket_stackv4 default_console [Ipaddr.V4.any])
+    (direct_stackv4_with_dhcp tap0)
+    (socket_stackv4 [Ipaddr.V4.any])
 
 let keys = generic_kv_ro "tls"
 let conduit_tls = conduit_direct ~tls:true stack
