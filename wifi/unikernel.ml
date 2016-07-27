@@ -246,6 +246,13 @@ module Main
     let ctx = Client.ctx resolver conduit in
     Wifi_Store.init ctx (persist_host, persist_port) ~time () >>= fun (s, min) ->
 
+    let exn_hook = function
+      | End_of_file ->
+         Log.info (fun f -> f "caught a wild EOF error!")
+      | _ as e ->
+         Log.err (fun f -> f "async_exception_hook: %s" (Printexc.to_string e)) in
+    Lwt.async_exception_hook := exn_hook;
+
     Lwt.pick [
       http tls @@ D.serve (D.wifi_dispatcher fs s);
       http (`TCP http_port) @@ D.serve D.redirect;
