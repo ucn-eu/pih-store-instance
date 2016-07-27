@@ -3,8 +3,10 @@ open V1_LWT
 open Lwt
 open Result
 
-let log_src = Logs.Src.create "ucn.wifi"
+let tag = "ucn.wifi"
+let log_src = Logs.Src.create tag
 module Log = (val Logs.src_log log_src : Logs.LOG)
+module Client = Cohttp_mirage.Client
 
 module Wifi_Store = struct
 
@@ -61,9 +63,69 @@ module Wifi_Store = struct
        with_ok_unit (S.update store ?src key body)
     | _ -> return (Error Not_found)
 
-  let init ~time () =
-    S.make ~owner:"ucn.wifi" ~time ()
-end
+
+  let init_with_dump ctx (host, port) owner store =
+    let (/) d f = Printf.sprintf "%s/%s" d f in
+    let uri = Uri.make ~scheme:"http" ~host ~port () in
+    let list_uri = Uri.with_path uri (owner / "list") in
+    Client.get ~ctx list_uri >>= fun (res, body) ->
+    let status = Cohttp.Response.status res in
+    if status <> `OK then begin
+      Log.err (fun f -> f "init_with_dump list: %s"
+        (Cohttp.Code.string_of_status status));
+      return_none end
+    else
+      Cohttp_lwt_body.to_string body >>= fun s ->
+      return Ezjsonm.(s |> from_string |> value |> get_list get_string)
+      >>= fun l ->
+      Log.info (fun f -> f "init with %d files" (List.length l));
+      let l =
+        List.map int_of_string l
+        |> List.sort compare |> List.map string_of_int in
+      Lwt_list.fold_left_s (fun acc file ->
+        let file_uri = Uri.with_path uri (owner / file) in
+        Client.get ~ctx file_uri >>= fun (res, dump) ->
+        let s = Cohttp.Response.status res in
+        if s <> `OK then return_none else
+          Cohttp_lwt_body.to_string dump >>= fun dump ->
+          S.import dump store >>= function
+          | Error e ->
+             Log.err (fun f -> f "error init_with_dump: %s"
+               (Printexc.to_string e));
+             return_none
+          | Ok h ->
+             Log.info (fun f -> f "init_with_dump: import %s" file);
+             return_some [h]) None l
+
+
+  let persist_t ctx (host, port) path s min period =
+    let uri = Uri.make ~scheme:"http" ~host ~port ~path () in
+    let rec aux ?min () =
+      OS.Time.sleep period >>= fun () ->
+      S.export ?min s >>= function
+      | Error e ->
+         Log.err (fun f -> f "wifi persist: %s" (Printexc.to_string e));
+         aux ?min ()
+      | Ok None ->
+         aux ?min ()
+      | Ok (Some (head, dump)) ->
+         let body = Cohttp_lwt_body.of_string dump in
+         Client.post ~ctx ~body uri >>= fun (res, _) ->
+         let status =
+           Cohttp.Response.status res
+           |> Cohttp.Code.string_of_status in
+         Log.info (fun f -> f "persist to %s: %s" (Uri.to_string uri) status);
+         aux ~min:[head] ()
+    in
+    aux ?min ()
+
+  let init ctx endp ~time () =
+    let owner = tag in
+    S.make ~owner ~time () >>= fun s ->
+    init_with_dump ctx endp owner s >>= fun head ->
+    return (s, head)
+
+ end
 
 
 module Dispatcher
@@ -136,6 +198,8 @@ end
 
 module Main
      (Http: Cohttp_lwt.Server)
+     (Resolver: Resolver_lwt.S)
+     (Conduit: Conduit_mirage.S)
      (FS: KV_RO)
      (Keys: KV_RO)
      (Clock: V1.CLOCK) = struct
@@ -154,25 +218,37 @@ module Main
     let conf = Tls.Config.server ~certificates:(`Single cert) () in
     Lwt.return conf
 
-  let start http fs keys _clock =
-    Logs.(set_level (Some Info));
-    let console_threshold src =
-      if src = log_src then Logs.Info
-      else Logs.Error in
-    Logs_reporter.(create ~console_threshold () |> run) @@ fun () ->
+  let gateway_rewrite service uri =
+    return (`TCP (Ipaddr.of_string_exn "10.0.0.1", 10003))
 
-    Wifi_Store.init ~time () >>= fun s ->
-
-    let conf = Server_config.read () in
-    let tls_port = try List.assoc "tls_port" conf with Not_found -> 4433 in
-    let http_port = try List.assoc "http_port" conf with Not_found -> 8088 in
+  let start http resolver conduit fs keys _clock =
+    Logs.(set_level (Some Error));
+    Logs_reporter.(create () |> run) @@ fun () ->
 
     tls_init keys >>= fun cfg ->
+
+    let conf = Server_config.read () in
+
+    let tls_port =
+      try List.assoc "tls_port" conf |> int_of_string
+      with Not_found -> 4433 in
+    let http_port =
+      try List.assoc "http_port" conf |> int_of_string
+      with Not_found -> 8088 in
     let tcp = `TCP tls_port in
     let tls = `TLS (cfg, tcp) in
 
-    Lwt.join [
+    let persist_host = List.assoc "persist_host" conf in
+    let persist_port = List.assoc "persist_port" conf |> int_of_string in
+    let persist_period = List.assoc "persist_period" conf |> float_of_string in
+
+    Resolver_lwt.add_rewrite ~host:persist_host ~f:gateway_rewrite resolver;
+    let ctx = Client.ctx resolver conduit in
+    Wifi_Store.init ctx (persist_host, persist_port) ~time () >>= fun (s, min) ->
+
+    Lwt.pick [
       http tls @@ D.serve (D.wifi_dispatcher fs s);
-      http (`TCP http_port) @@ D.serve D.redirect
+      http (`TCP http_port) @@ D.serve D.redirect;
+      Wifi_Store.persist_t ctx (persist_host, persist_port) tag s min persist_period;
     ]
 end
