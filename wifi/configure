@@ -1,0 +1,5 @@
+#!/bin/bash -ex
+
+mirage clean || true
+mirage configure -t xen --no-opam --persist-host 10.0.0.1 --persist-port 10000 --persist-period 15
+mirage build

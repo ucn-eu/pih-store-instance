@@ -1,5 +1,21 @@
 open Mirage
 
+let persist_host =
+  Key.create "persist-host" @@ Key.Arg.required Key.Arg.string (Key.Arg.info ["persist-host"])
+
+let persist_port =
+  Key.create "persist-port" @@ Key.Arg.required Key.Arg.int (Key.Arg.info ["persist-port"])
+
+(* in seconds *)
+let persist_period =
+  Key.create "persist-period" @@ Key.Arg.required Key.Arg.int (Key.Arg.info ["persist-period"])
+
+let keys = Key.[
+  abstract persist_host;
+  abstract persist_port;
+  abstract persist_period; ]
+
+
 let stack =
   if_impl Key.is_xen
     (direct_stackv4_with_default_ipv4 (netif "0"))
@@ -12,7 +28,7 @@ let resolver_impl =
 
 let conduit_tls = conduit_direct ~tls:true stack
 
-let keys = crunch "tls"
+let tls = crunch "tls"
 let fs = crunch "files"
 
 let main =
@@ -27,6 +43,6 @@ let () =
       "mirage-logs";
       "pih-store"
     ] in
-  register ~libraries "wifi" [
-    main $ https $ resolver_impl $ conduit_tls $ fs $ keys $ default_clock
+  register ~libraries ~keys "wifi" [
+    main $ https $ resolver_impl $ conduit_tls $ fs $ tls $ default_clock
   ]

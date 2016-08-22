@@ -3,8 +3,7 @@ open V1_LWT
 open Lwt
 open Result
 
-let tag = "ucn.wifi"
-let log_src = Logs.Src.create tag
+let log_src = Logs.Src.create "ucn.wifi"
 module Log = (val Logs.src_log log_src : Logs.LOG)
 module Client = Cohttp_mirage.Client
 
@@ -64,10 +63,10 @@ module Wifi_Store = struct
     | _ -> return (Error Not_found)
 
 
-  let init_with_dump ctx (host, port) owner store =
+  let init_with_dump ctx (host, port) path store =
     let (/) d f = Printf.sprintf "%s/%s" d f in
     let uri = Uri.make ~scheme:"http" ~host ~port () in
-    let list_uri = Uri.with_path uri (owner / "list") in
+    let list_uri = Uri.with_path uri (path / "list") in
     Client.get ~ctx list_uri >>= fun (res, body) ->
     let status = Cohttp.Response.status res in
     if status <> `OK then begin
@@ -83,7 +82,7 @@ module Wifi_Store = struct
         List.map int_of_string l
         |> List.sort compare |> List.map string_of_int in
       Lwt_list.fold_left_s (fun acc file ->
-        let file_uri = Uri.with_path uri (owner / file) in
+        let file_uri = Uri.with_path uri (path / file) in
         Client.get ~ctx file_uri >>= fun (res, dump) ->
         let s = Cohttp.Response.status res in
         if s <> `OK then return_none else
@@ -98,8 +97,7 @@ module Wifi_Store = struct
              return_some [h]) None l
 
 
-  let persist_t ctx (host, port) path s min period =
-    let uri = Uri.make ~scheme:"http" ~host ~port ~path () in
+  let persist_t ctx uri s min period =
     let rec aux ?min () =
       OS.Time.sleep period >>= fun () ->
       S.export ?min s >>= function
@@ -119,8 +117,9 @@ module Wifi_Store = struct
     in
     aux ?min ()
 
+
   let init ctx endp ~time () =
-    let owner = tag in
+    let owner = "ucn.wifi" in
     S.make ~owner ~time () >>= fun s ->
     init_with_dump ctx endp owner s >>= fun head ->
     return (s, head)
@@ -218,8 +217,6 @@ module Main
     let conf = Tls.Config.server ~certificates:(`Single cert) () in
     Lwt.return conf
 
-  let gateway_rewrite service uri =
-    return (`TCP (Ipaddr.of_string_exn "10.0.0.1", 10003))
 
   let start http resolver conduit fs keys _clock =
     Logs.(set_level (Some Error));
@@ -227,22 +224,14 @@ module Main
 
     tls_init keys >>= fun cfg ->
 
-    let conf = Server_config.read () in
-
-    let tls_port =
-      try List.assoc "tls_port" conf |> int_of_string
-      with Not_found -> 4433 in
-    let http_port =
-      try List.assoc "http_port" conf |> int_of_string
-      with Not_found -> 8088 in
-    let tcp = `TCP tls_port in
+    let tcp = `TCP  8443 in
     let tls = `TLS (cfg, tcp) in
 
-    let persist_host = List.assoc "persist_host" conf in
-    let persist_port = List.assoc "persist_port" conf |> int_of_string in
-    let persist_period = List.assoc "persist_period" conf |> float_of_string in
+    let persist_host = Key_gen.persist_host () in
+    let persist_port = Key_gen.persist_port () in
+    let persist_period = Key_gen.persist_period () |> float_of_int in
+    let persist_uri = Uri.make ~scheme:"http" ~host:persist_host ~port:persist_port ~path:"ucn.wifi" () in
 
-    Resolver_lwt.add_rewrite ~host:persist_host ~f:gateway_rewrite resolver;
     let ctx = Client.ctx resolver conduit in
     Wifi_Store.init ctx (persist_host, persist_port) ~time () >>= fun (s, min) ->
 
@@ -255,7 +244,7 @@ module Main
 
     Lwt.pick [
       http tls @@ D.serve (D.wifi_dispatcher fs s);
-      http (`TCP http_port) @@ D.serve D.redirect;
-      Wifi_Store.persist_t ctx (persist_host, persist_port) tag s min persist_period;
+      http (`TCP 8080) @@ D.serve D.redirect;
+      Wifi_Store.persist_t ctx persist_uri s min persist_period;
     ]
 end
