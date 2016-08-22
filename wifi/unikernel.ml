@@ -217,9 +217,11 @@ module Main
     let conf = Tls.Config.server ~certificates:(`Single cert) () in
     Lwt.return conf
 
+  let async_hook exn =
+    Log.err (fun f -> f "async hook: %s" (Printexc.to_string exn))
 
   let start http resolver conduit fs keys _clock =
-    Logs.(set_level (Some Error));
+    Lwt.async_exception_hook := async_hook;
     Logs_reporter.(create () |> run) @@ fun () ->
 
     tls_init keys >>= fun cfg ->
@@ -227,20 +229,13 @@ module Main
     let tcp = `TCP  8443 in
     let tls = `TLS (cfg, tcp) in
 
-    let persist_host = Key_gen.persist_host () in
+    let persist_host = Key_gen.persist_host () |> Ipaddr.V4.to_string in
     let persist_port = Key_gen.persist_port () in
     let persist_period = Key_gen.persist_period () |> float_of_int in
     let persist_uri = Uri.make ~scheme:"http" ~host:persist_host ~port:persist_port ~path:"ucn.wifi" () in
 
     let ctx = Client.ctx resolver conduit in
     Wifi_Store.init ctx (persist_host, persist_port) ~time () >>= fun (s, min) ->
-
-    let exn_hook = function
-      | End_of_file ->
-         Log.info (fun f -> f "caught a wild EOF error!")
-      | _ as e ->
-         Log.err (fun f -> f "async_exception_hook: %s" (Printexc.to_string e)) in
-    Lwt.async_exception_hook := exn_hook;
 
     Lwt.pick [
       http tls @@ D.serve (D.wifi_dispatcher fs s);

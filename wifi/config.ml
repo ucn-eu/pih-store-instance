@@ -1,29 +1,28 @@
 open Mirage
 
+let addr = Ipaddr.V4.of_string_exn
+
 let persist_host =
-  Key.create "persist-host" @@ Key.Arg.required Key.Arg.string (Key.Arg.info ["persist-host"])
+  let default = addr "10.0.0.1" in
+  Key.create "persist-host" @@ Key.Arg.opt Key.Arg.ipv4 default (Key.Arg.info ["persist-host"])
 
 let persist_port =
-  Key.create "persist-port" @@ Key.Arg.required Key.Arg.int (Key.Arg.info ["persist-port"])
+  let default = 10000 in
+  Key.create "persist-port" @@ Key.Arg.opt Key.Arg.int default (Key.Arg.info ["persist-port"])
 
-(* in seconds *)
 let persist_period =
-  Key.create "persist-period" @@ Key.Arg.required Key.Arg.int (Key.Arg.info ["persist-period"])
+  (* in seconds *)
+  let default = 15 in
+  Key.create "persist-period" @@ Key.Arg.opt Key.Arg.int default (Key.Arg.info ["persist-period"])
 
 let keys = Key.[
   abstract persist_host;
   abstract persist_port;
   abstract persist_period; ]
 
-let ip_config =
-  let addr = Ipaddr.V4.of_string_exn in
-  { address  = addr "192.168.252.10";
-    netmask  = addr "255.255.255.0";
-    gateways = [addr "192.168.252.2"]; }
-
 let stack =
   if_impl Key.is_xen
-    (direct_stackv4_with_static_ipv4 (netif "0") ip_config)
+    (direct_stackv4_with_default_ipv4 (netif "0"))
     (socket_stackv4 [Ipaddr.V4.any])
 
 let https = http_server @@ conduit_direct ~tls:true stack
