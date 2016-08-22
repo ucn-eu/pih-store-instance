@@ -172,7 +172,7 @@ module Dispatcher
 
   let redirect ?src uri _req _body =
     let new_uri = Uri.with_scheme uri (Some "https") in
-    let new_uri = Uri.with_port new_uri (Some 4433) in
+    let new_uri = Uri.with_port new_uri (Some 8443) in
     let headers =
       Cohttp.Header.add headers "location" (Uri.to_string new_uri)
     in
