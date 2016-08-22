@@ -5,6 +5,7 @@ open Result
 
 let log_src = Logs.Src.create "ucn.review"
 module Log = (val Logs.src_log log_src : Logs.LOG)
+module Client = Cohttp_mirage.Client
 
 module Review_Store = struct
 
@@ -51,8 +52,68 @@ module Review_Store = struct
        with_ok_list (S.list store ?src ())
     | _ -> return (Error Not_found)
 
-  let init ~time () =
-    S.make ~owner:"ucn.review" ~time ~check ()
+
+  let init_with_dump ctx (host, port) path store =
+    let (/) d f = Printf.sprintf "%s/%s" d f in
+    let uri = Uri.make ~scheme:"http" ~host ~port () in
+    let list_uri = Uri.with_path uri (path / "list") in
+    Client.get ~ctx list_uri >>= fun (res, body) ->
+    let status = Cohttp.Response.status res in
+    if status <> `OK then begin
+      Log.err (fun f -> f "init_with_dump list: %s"
+        (Cohttp.Code.string_of_status status));
+      return_none end
+    else
+      Cohttp_lwt_body.to_string body >>= fun s ->
+      return Ezjsonm.(s |> from_string |> value |> get_list get_string)
+      >>= fun l ->
+      Log.info (fun f -> f "init with %d files" (List.length l));
+      let l =
+        List.map int_of_string l
+        |> List.sort compare |> List.map string_of_int in
+      Lwt_list.fold_left_s (fun acc file ->
+        let file_uri = Uri.with_path uri (path / file) in
+        Client.get ~ctx file_uri >>= fun (res, dump) ->
+        let s = Cohttp.Response.status res in
+        if s <> `OK then return_none else
+          Cohttp_lwt_body.to_string dump >>= fun dump ->
+          S.import dump store >>= function
+          | Error e ->
+             Log.err (fun f -> f "error init_with_dump: %s"
+               (Printexc.to_string e));
+             return_none
+          | Ok h ->
+             Log.info (fun f -> f "init_with_dump: import %s" file);
+             return_some [h]) None l
+
+
+  let persist_t ctx uri s min period =
+    let rec aux ?min () =
+      OS.Time.sleep period >>= fun () ->
+      S.export ?min s >>= function
+      | Error e ->
+         Log.err (fun f -> f "review persist: %s" (Printexc.to_string e));
+         aux ?min ()
+      | Ok None ->
+         aux ?min ()
+      | Ok (Some (head, dump)) ->
+         let body = Cohttp_lwt_body.of_string dump in
+         Client.post ~ctx ~body uri >>= fun (res, _) ->
+         let status =
+           Cohttp.Response.status res
+           |> Cohttp.Code.string_of_status in
+         Log.info (fun f -> f "persist to %s: %s" (Uri.to_string uri) status);
+         aux ~min:[head] ()
+    in
+    aux ?min ()
+
+
+  let init ctx endp ~time () =
+    let owner = "ucn.review" in
+    S.make ~owner ~time () >>= fun s ->
+    init_with_dump ctx endp owner s >>= fun head ->
+    return (s, head)
+
 end
 
 
@@ -83,7 +144,7 @@ module Dispatcher
 
   let redirect ?src uri _req _body =
     let new_uri = Uri.with_scheme uri (Some "https") in
-    let new_uri = Uri.with_port new_uri (Some 4433) in
+    let new_uri = Uri.with_port new_uri (Some 8443) in
     let headers =
       Cohttp.Header.add headers "location" (Uri.to_string new_uri)
     in
@@ -108,6 +169,8 @@ end
 
 module Main
      (Http: Cohttp_lwt.Server)
+     (Resolver: Resolver_lwt.S)
+     (Conduit: Conduit_mirage.S)
      (Keys: KV_RO)
      (Clock: V1.CLOCK) = struct
 
@@ -125,18 +188,29 @@ module Main
     let conf = Tls.Config.server ~certificates:(`Single cert) () in
     Lwt.return conf
 
-  let start http keys _clock =
-    Logs.(set_level (Some Info));
+  let async_hook exn =
+    Log.err (fun f -> f "async hook: %s" (Printexc.to_string exn))
+
+  let start http resolver conduit keys _clock =
+    Lwt.async_exception_hook := async_hook;
     Logs_reporter.(create () |> run) @@ fun () ->
 
-    Review_Store.init ~time () >>= fun s ->
-
     tls_init keys >>= fun cfg ->
-    let tcp = `TCP 4433 in
+
+    let tcp = `TCP 8443 in
     let tls = `TLS (cfg, tcp) in
+
+    let persist_host = Key_gen.persist_host () |> Ipaddr.V4.to_string in
+    let persist_port = Key_gen.persist_port () in
+    let persist_period = Key_gen.persist_period () |> float_of_int in
+    let persist_uri = Uri.make ~scheme:"http" ~host:persist_host ~port:persist_port ~path:"ucn.review" () in
+
+    let ctx = Client.ctx resolver conduit in
+    Review_Store.init ctx (persist_host, persist_port) ~time () >>= fun (s, min) ->
 
     Lwt.join [
       http tls @@ D.serve (D.review_dispatcher s);
-      http (`TCP 8081) @@ D.serve D.redirect
+      http (`TCP 8080) @@ D.serve D.redirect;
+      Review_Store.persist_t ctx persist_uri s min persist_period;
     ]
 end
