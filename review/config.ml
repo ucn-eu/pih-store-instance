@@ -7,18 +7,12 @@ let persist_host =
   Key.create "persist-host" @@ Key.Arg.opt Key.Arg.ipv4 default (Key.Arg.info ["persist-host"])
 
 let persist_port =
-  let default = 10000 in
+  let default = 10002 in
   Key.create "persist-port" @@ Key.Arg.opt Key.Arg.int default (Key.Arg.info ["persist-port"])
-
-let persist_period =
-  (* in seconds *)
-  let default = 15 in
-  Key.create "persist-period" @@ Key.Arg.opt Key.Arg.int default (Key.Arg.info ["persist-period"])
 
 let keys = Key.[
   abstract persist_host;
-  abstract persist_port;
-  abstract persist_period; ]
+  abstract persist_port; ]
 
 let stack =
   if_impl Key.is_xen
