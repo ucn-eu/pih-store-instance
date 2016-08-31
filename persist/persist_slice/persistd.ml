@@ -1,12 +1,3 @@
-#use "topfind";;
-#require "lwt";;
-#require "lwt.unix";;
-#require "cohttp";;
-#require "cohttp.lwt";;
-#require "astring";;
-#require "ezjsonm";;
-#require "conduit";;
-
 open Cohttp
 open Cohttp_lwt_unix
 
@@ -92,7 +83,7 @@ let serve () =
   let s = Server.make ~conn_closed ~callback () in
   Conduit_lwt_unix.init ~src:"10.0.0.1" () >>= fun conduit_ctx ->
   let ctx = Cohttp_lwt_unix_net.init ~ctx:conduit_ctx () in
-  Server.create ~ctx ~mode:(`TCP (`Port 10003)) s
+  Server.create ~ctx ~mode:(`TCP (`Port 10000)) s
 
 
 let init_counter () =
