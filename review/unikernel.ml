@@ -24,7 +24,21 @@ module Review_Store = struct
       | _ -> false
     with _ -> false
 
-  let to_meta s = ""
+  let to_meta s = Ezjsonm.(
+    let v = from_string s in
+    match v with
+    | `O _ as d ->
+       let dic = get_dict d in
+       let review = Printf.sprintf "%s %s"
+           (List.assoc "rating" dic |> get_string)
+           (List.assoc "comment" dic |> get_string) in
+       let meta = [
+           "movie_title", List.assoc "title" dic;
+           "movie_review", review |> string
+         ] |> dict |> to_string in
+       meta
+    | _ -> failwith ("to_meta: not a json object " ^ s))
+
 
   let with_ok_unit t = t >>= function
     | Ok () -> return (Ok "")
