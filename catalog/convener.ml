@@ -21,15 +21,14 @@ let error_of_response status body =
   let f = Printf.sprintf "%s:%s" s body in
   return (Error (Failure f))
 
-let get_meta {c_domain; c_root; ctx} id =
-  let uri = Uri.with_path c_root ("/meta/" ^ id) in
+let get_meta {c_domain; c_root; ctx} =
+  let uri = Uri.with_path c_root "/meta" in
   Client.get ~ctx uri >>= fun (res, body) ->
   let status = Cohttp.Response.status res in
   if status = `OK then
     Cohttp_lwt_body.to_string body >>= fun data ->
-    let file_id = to_id c_domain id in
     let meta = Ezjsonm.(dict [
-      "file_id", string file_id;
+      "file_id", string c_domain;
       "data", string data]
       |> to_string) in
     return (Ok meta)

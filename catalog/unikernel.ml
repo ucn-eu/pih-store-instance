@@ -30,54 +30,55 @@ module Catalog_Store = struct
     return (f, u))
 
   let record_delegations store ?src ~file_id op =
-    S.read store ?src [file_id] >>= function
-    | Error _ as e -> return e
-    | Ok v ->
-       let l = Ezjsonm.(from_string v |> value |> get_list get_string) in
-       match op with
-       | `Delegate user_id ->
-          let l = if not (List.mem user_id l) then user_id :: l else l in
-          let v = Ezjsonm.(list string l |> to_string) in
-          S.update store ?src [file_id] v
-       | `Revoke user_id ->
-          let l = List.filter (fun i -> not (i = user_id)) l in
-          let v = Ezjsonm.(list string l |> to_string) in
-          S.update store ?src [file_id] v
+    S.read store ?src [file_id] >>= (function
+    | Error _ as e -> return_nil
+    | Ok v -> return @@ Ezjsonm.(from_string v |> value |> get_list get_string))
+    >>= fun l ->
+    match op with
+    | `Delegate user_id ->
+       let l = if not (List.mem user_id l) then user_id :: l else l in
+       let v = Ezjsonm.(list string l |> to_string) in
+       S.update store ?src [file_id] v
+    | `Revoke user_id ->
+       let l = List.filter (fun i -> not (i = user_id)) l in
+       let v = Ezjsonm.(list string l |> to_string) in
+       S.update store ?src [file_id] v
 
 
   let dispatch (store, muse, cmap) ?src body = function
     | ["users"] ->
        with_ok_list (Muse.get_users muse)
-    | category :: steps ->
-       let con = ConvenerMap.find category cmap in
-       match steps with
-       | ["upload"] ->
-          Cohttp_lwt_body.to_string body >>= fun body -> Ezjsonm.(
-          let v = from_string body |> value |> get_dict in
-          let f = List.assoc "file_id" v |> get_string in
-          let d = List.assoc "data" v |> get_string in
-          Muse.upload muse ~file_id:f ~data:d)
-          |> with_ok_unit
-       | "read" :: "meta" :: [id] ->
-          Convener.get_meta con id
-       | "read" :: ["list"] ->
-          with_ok_list (Convener.list con)
-       | "read" :: "delegation" :: [file_id] ->
-          S.read store ?src [file_id]
-       | ["delegate"] ->
-          delegation_operands body >>= fun (file_id, user_id) ->
-          Muse.delegate muse ~file_id ~user_id
-          >>= (function
-          | Ok () -> record_delegations store ?src ~file_id (`Delegate user_id)
-          | Error _ as e -> return e)
-          |> with_ok_unit
-       | ["revoke"] ->
-          delegation_operands body >>= fun (file_id, user_id) ->
-          Muse.revoke muse ~file_id ~user_id
-          >>= (function
-          | Ok () -> record_delegations store ?src ~file_id (`Revoke user_id)
-          | Error _ as e -> return e)
-          |> with_ok_unit
+    | ["upload"] ->
+       Cohttp_lwt_body.to_string body >>= fun body -> Ezjsonm.(
+         let v = from_string body |> value |> get_dict in
+         let f = List.assoc "file_id" v |> get_string in
+         let d = List.assoc "data" v |> get_string in
+         Muse.upload muse ~file_id:f ~data:d)
+         |> with_ok_unit
+    (*| "read" :: "meta" :: [id] ->
+       Convener.get_meta con id
+    | "read" :: ["list"] ->
+       with_ok_list (Convener.list con) *)
+    | ["list"] ->
+       let l = ConvenerMap.fold (fun d _ acc -> d :: acc) cmap [] in
+       with_ok_list (return @@ Ok l)
+    | "read" :: "meta" :: [domain] ->
+       let con = ConvenerMap.find domain cmap in
+       Convener.get_meta con
+    | "read" :: "delegation" :: [file_id] ->
+       S.read store ?src [file_id]
+    | ["delegate"] ->
+       delegation_operands body >>= fun (file_id, user_id) ->
+       Muse.delegate muse ~file_id ~user_id >>= (function
+         | Ok () -> record_delegations store ?src ~file_id (`Delegate user_id)
+         | Error _ as e -> return e)
+       |> with_ok_unit
+    | ["revoke"] ->
+       delegation_operands body >>= fun (file_id, user_id) ->
+       Muse.revoke muse ~file_id ~user_id >>= (function
+         | Ok () -> record_delegations store ?src ~file_id (`Revoke user_id)
+         | Error _ as e -> return e)
+       |> with_ok_unit
 
   let gen_cmap ctx l =
     let map = ConvenerMap.empty in

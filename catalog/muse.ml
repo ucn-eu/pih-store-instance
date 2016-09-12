@@ -23,6 +23,7 @@ let post_req ~ctx ?headers uri body cb =
   let headers = match headers with
     | None -> Cohttp.Header.init ()
     | Some h -> h in
+  let headers = Cohttp.Header.add headers "Content-Length" (len |> Int64.to_string) in
   Cohttp_mirage.Client.post ~ctx ~headers ~body uri
   >>= fun r ->
   cb r
@@ -123,7 +124,9 @@ let register ~ctx ~root =
   let uri = Uri.with_path root "/setup" in
   let rec aux user_id =
     if user_id = None then
-      let id = Uuidm.(create `V4 |> to_string) in
+      let id =
+        Uuidm.(create `V4 |> to_string)
+        |> (fun i -> String.sub i 0 6) in
       let body = Ezjsonm.(
         ["user_id", string id]
         |> dict

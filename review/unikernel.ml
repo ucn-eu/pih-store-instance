@@ -40,6 +40,19 @@ module Review_Store = struct
     | _ -> failwith ("to_meta: not a json object " ^ s))
 
 
+  let meta = Ezjsonm.(
+    let category = "movie review" in
+    let version = "1.3.2" in
+    let desp = "Object {id, title, rating, comment}" in
+    let dict =
+      let l = [
+          "category", category |> string;
+          "version", version |> string;
+          "description", desp |> string] in
+      dict l |> to_string in
+    dict)
+
+
   let with_ok_unit t = t >>= function
     | Ok () -> return (Ok "")
     | Error _ as e -> return e
@@ -62,6 +75,8 @@ module Review_Store = struct
        with_ok_unit (S.remove store ?src [id])
     | ["meta"; id] ->
        S.get_meta store ?src [id] to_meta
+    | ["meta"] ->
+       return @@ Ok meta
     | ["list"] ->
        with_ok_list (S.list store ?src ())
     | _ -> return (Error Not_found)
