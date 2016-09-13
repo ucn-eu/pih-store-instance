@@ -1,0 +1,9 @@
+cd ../../muse
+python3 -m muse csp &
+python3 -m muse proxy &
+python3 -m muse user --rest &
+
+
+#cd ../catalog
+#sleep 5
+#./mir-ucn-catalog
