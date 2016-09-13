@@ -1,0 +1,51 @@
+#!/bin/bash -e
+
+DAEMON=/home/qli/workspace/pih-store-instance/persist/persist_server/main.native
+DIR=("ucn.gatekeeper" "ucn.bridge" "ucn.review" "ucn.catalog")
+PORT=("10000" "10001" "10002" "10003")
+
+case $1 in
+
+"clean")
+  for p in $(pidof $DAEMON); do
+    echo kill $p
+    kill $p
+  done
+
+  for i in $(ls | grep ucn); do
+      echo rm -rf $i
+      rm -rf $i
+  done
+  ;;
+
+"init")
+  for ((i=0;i<${#DIR[@]};++i)); do
+      d=${DIR[i]}
+      if [ -d $d ]; then
+          echo $d exists
+      else
+          echo mkdir $d
+          mkdir $d
+      fi
+  done
+  ;;
+
+"start")
+  for ((i=0;i<${#DIR[@]};++i)); do
+      d=${DIR[i]}
+      p=${PORT[i]}
+      wd=`pwd`
+
+      cd $wd/$d
+      pwd
+      echo $DAEMON $p
+      $DAEMON $p &
+      cd $wd
+  done
+  ;;
+
+
+*)
+  echo "unknown subcommand [" $1 "]"
+  ;;
+esac
