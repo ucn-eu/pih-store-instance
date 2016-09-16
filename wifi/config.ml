@@ -3,22 +3,14 @@ open Mirage
 let addr = Ipaddr.V4.of_string_exn
 
 let persist_host =
-  let default = addr "10.0.0.1" in
-  Key.create "persist-host" @@ Key.Arg.opt Key.Arg.ipv4 default (Key.Arg.info ["persist-host"])
+  Key.create "persist-host" @@ Key.Arg.required Key.Arg.ipv4 (Key.Arg.info ["persist-host"])
 
 let persist_port =
-  let default = 10000 in
-  Key.create "persist-port" @@ Key.Arg.opt Key.Arg.int default (Key.Arg.info ["persist-port"])
-
-let persist_period =
-  (* in seconds *)
-  let default = 15 in
-  Key.create "persist-period" @@ Key.Arg.opt Key.Arg.int default (Key.Arg.info ["persist-period"])
+  Key.create "persist-port" @@ Key.Arg.required Key.Arg.int (Key.Arg.info ["persist-port"])
 
 let keys = Key.[
   abstract persist_host;
-  abstract persist_port;
-  abstract persist_period; ]
+  abstract persist_port; ]
 
 let stack =
   if_impl Key.is_xen

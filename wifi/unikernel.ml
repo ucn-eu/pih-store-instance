@@ -118,11 +118,10 @@ module Wifi_Store = struct
     aux ?min ()
 
 
-  let init ctx endp ~time () =
+  let init remote_conf ~time () =
     let owner = "ucn.wifi" in
-    S.make ~owner ~time () >>= fun s ->
-    init_with_dump ctx endp owner s >>= fun head ->
-    return (s, head)
+    let backend = `Http (remote_conf, owner) in
+    S.make ~backend ~time ()
 
  end
 
@@ -231,15 +230,12 @@ module Main
 
     let persist_host = Key_gen.persist_host () |> Ipaddr.V4.to_string in
     let persist_port = Key_gen.persist_port () in
-    let persist_period = Key_gen.persist_period () |> float_of_int in
-    let persist_uri = Uri.make ~scheme:"http" ~host:persist_host ~port:persist_port ~path:"ucn.wifi" () in
+    let persist_uri = Uri.make ~scheme:"http" ~host:persist_host ~port:persist_port () in
 
-    let ctx = Client.ctx resolver conduit in
-    Wifi_Store.init ctx (persist_host, persist_port) ~time () >>= fun (s, min) ->
+    Wifi_Store.init (resolver, conduit, persist_uri) ~time () >>= fun s ->
 
     Lwt.pick [
       http tls @@ D.serve (D.wifi_dispatcher fs s);
       http (`TCP 8080) @@ D.serve D.redirect;
-      Wifi_Store.persist_t ctx persist_uri s min persist_period;
     ]
 end
