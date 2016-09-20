@@ -11,7 +11,7 @@ module Box_Store = struct
 
   module S = Data_store
 
-  let to_meta s = ""
+  let endpoint = ref None
 
   let with_ok_unit t = t >>= function
     | Ok () -> return (Ok "")
@@ -24,7 +24,20 @@ module Box_Store = struct
     | Error _ as e -> return e
 
 
-  let dispatch store ?src headers body meth steps =
+  let publish ctx v = match !endpoint with
+    | None -> return_unit
+    | Some uri ->
+       let headers = Cohttp.Header.init_with "content-type" "application/json" in
+       let body = Cohttp_lwt_body.of_string v in
+       Client.post ~ctx ~body ~headers uri >>= fun (res, _) ->
+       let code = Cohttp.Response.status res in
+       if code <> `OK then
+         Log.warn (fun f -> f "publish to %s: %s"
+           (Uri.to_string uri) (Cohttp.Code.string_of_status code));
+       return_unit
+
+
+  let dispatch (ctx, store) ?src headers body meth steps =
     let path = String.concat "/" steps in
     match meth, steps with
     | `GET, steps ->
@@ -54,7 +67,17 @@ module Box_Store = struct
            return (Error Not_found) end
 
     | `POST, ["endpoint"] ->
-       with_ok_unit @@ S.update store ?src ["endpoint"] body
+       (try
+         let uri_str = Ezjsonm.(
+           from_string body
+           |> value
+           |> get_dict
+           |> List.assoc "uri"
+           |> get_string) in
+         let uri = Uri.of_string uri_str in
+         let () = endpoint := Some uri in
+         with_ok_unit @@ S.update store ?src ["endpoint"] body
+       with _ -> return @@ Error (Invalid_argument body))
 
     | `POST, steps ->
        assert (4 = List.length steps); (* entry writing for yy/mm/dd/tunetime *)
@@ -74,6 +97,8 @@ module Box_Store = struct
          |> List.map (fun (k, v) -> k, string v)
          |> dict
          |> to_string) in
+
+       publish ctx v >>= fun () ->
        with_ok_unit @@ S.update store ?src steps v
 
     | _ -> return @@ Error Not_found
@@ -96,14 +121,14 @@ module Dispatcher
   let empty_body = Cohttp_lwt_body.empty
 
   (* TODO: get src information *)
-  let box_dispatcher store ?src uri req body =
+  let box_dispatcher (ctx, store) ?src uri req body =
     let p = Uri.path uri in
     let steps = Astring.String.cuts ~empty:false ~sep:"/" p in
     let meth = Cohttp.Request.meth req in
     let req_headers = Cohttp.Request.headers req in
     Cohttp_lwt_body.to_string body >>= fun body ->
     Log.app (fun f -> f "%s %s" (Cohttp.Code.string_of_method meth) p);
-    Box_Store.dispatch store ?src req_headers body meth steps
+    Box_Store.dispatch (ctx, store) ?src req_headers body meth steps
     >>= function
     | Ok "" -> Http.respond ~headers ~status:`OK ~body:empty_body ()
     | Ok json ->
@@ -178,10 +203,11 @@ module Main
     let persist_port = Key_gen.persist_port () in
     let persist_uri = Uri.make ~scheme:"http" ~host:persist_host ~port:persist_port () in
 
+    let ctx = Client.ctx resolver conduit in
     Box_Store.init (resolver, conduit, persist_uri) ~time () >>= fun s ->
 
     Lwt.pick [
-      http tls @@ D.serve (D.box_dispatcher s);
+      http tls @@ D.serve (D.box_dispatcher (ctx, s));
       http (`TCP 8080) @@ D.serve D.redirect;
     ]
 end
