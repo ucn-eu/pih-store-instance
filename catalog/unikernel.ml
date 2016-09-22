@@ -164,16 +164,12 @@ module Main
      (Resolver: Resolver_lwt.S)
      (Conduit: Conduit_mirage.S)
      (Keys: KV_RO)
-     (Clock: V1.CLOCK) = struct
+     (Clock: V1.PCLOCK) = struct
 
   module X509 = Tls_mirage.X509(Keys)(Clock)
   module Logs_reporter = Mirage_logs.Make(Clock)
   module D = Dispatcher(Http)
 
-  let time () = Clock.(
-    let t = time () |> gmtime in
-    Printf.sprintf "%d:%d:%d:%d:%d:%d"
-      t.tm_year t.tm_mon t.tm_mday t.tm_hour t.tm_min t.tm_sec)
 
   let tls_init kv =
     X509.certificate kv `Default >>= fun cert ->
@@ -185,7 +181,7 @@ module Main
     | exn -> Log.err (fun f -> f "async_hook %s" (Printexc.to_string exn))
 
 
-  let start http resolver conduit keys _clock =
+  let start http resolver conduit keys clock =
     let () = Lwt.async_exception_hook := async_hook in
     tls_init keys >>= fun tls_conf ->
 
@@ -196,6 +192,7 @@ module Main
     let muse = Dom_configs.muse_endpoint in
     let domains = Dom_configs.domain_lst in
 
+    let time () = Clock.now_d_ps clock |> Ptime.v |> Ptime.to_rfc3339 ~space:true in
     Catalog_Store.init (resolver, conduit, persist_uri) muse domains ~time () >>= fun s ->
 
     tls_init keys >>= fun cfg ->

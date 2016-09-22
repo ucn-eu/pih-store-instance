@@ -27,7 +27,7 @@ let tls = crunch "tls"
 
 let main =
   foreign "Unikernel.Main"
-    (http @-> resolver @-> conduit @-> kv_ro @-> clock @-> job)
+    (http @-> resolver @-> conduit @-> kv_ro @-> pclock @-> job)
 
 
 let () =
@@ -38,5 +38,5 @@ let () =
       "pih-store"
     ] in
   register ~libraries ~keys "catalog" [
-    main $ https $ resolver_impl $ conduit_impl $ tls $ default_clock
+    main $ https $ resolver_impl $ conduit_impl $ tls $ default_posix_clock
   ]
