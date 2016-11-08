@@ -196,15 +196,44 @@ end
 
 
 module Main
-     (Http: Cohttp_lwt.Server)
+     (Stack:STACKV4)
+     (*(Http: Cohttp_lwt.Server)*)
      (Resolver: Resolver_lwt.S)
      (Conduit: Conduit_mirage.S)
      (Keys: KV_RO)
      (Clock: V1.PCLOCK) = struct
 
+  module TLS = Tls_mirage.Make(Stack.TCPV4)
+  module Http = Cohttp_mirage.Server(Stack.TCPV4)
+  module Https = Cohttp_mirage.Server(TLS)
+  
   module X509 = Tls_mirage.X509(Keys)(Clock)
   module Logs_reporter = Mirage_logs.Make(Clock)
-  module D = Dispatcher(Http)
+  module D = Dispatcher(Https)
+
+  let with_tls tls_conf conf f =
+    TLS.server_of_flow tls_conf f >>= function
+    | `Error e ->
+       Log.err (fun f -> f "upgrade: %s" (TLS.error_message e));
+       return_unit
+    | `Eof ->
+       Log.err (fun f -> f "upgrade: EOF");
+       return_unit
+    | `Ok f ->
+       let callback (_, cid) request body =
+         let src = None in
+         let uri = Cohttp.Request.uri request in
+         let cid = Cohttp.Connection.to_string cid in
+         Log.info (fun f -> f  "[%s] serving %s." cid (Uri.to_string uri));
+         D.review_dispatcher conf ?src uri request body
+       in
+       let conn_closed (_,cid) =
+         let cid = Cohttp.Connection.to_string cid in
+         Log.info (fun f -> f "[%s] closing" cid);
+       in
+       let t = Https.make ~conn_closed ~callback () in
+       Https.(listen t f)
+
 
   let tls_init kv =
     X509.certificate kv `Default >>= fun cert ->
@@ -214,14 +243,13 @@ module Main
   let async_hook exn =
     Log.err (fun f -> f "async hook: %s" (Printexc.to_string exn))
 
-  let start http resolver conduit keys clock =
+  let start stack resolver conduit keys clock =
     Lwt.async_exception_hook := async_hook;
-    Logs_reporter.(create clock |> run) @@ fun () ->
 
     tls_init keys >>= fun cfg ->
 
-    let tcp = `TCP 8443 in
-    let tls = `TLS (cfg, tcp) in
+    (*let tcp = `TCP 8443 in
+    let tls = `TLS (cfg, tcp) in*)
 
     let persist_host = Key_gen.persist_host () |> Ipaddr.V4.to_string in
     let persist_port = Key_gen.persist_port () in
@@ -230,8 +258,11 @@ module Main
     let time () = Clock.now_d_ps clock |> Ptime.v |> Ptime.to_rfc3339 ~space:true in
     Review_Store.init (resolver, conduit, persist_uri) ~time () >>= fun s ->
 
-    Lwt.join [
+    Stack.listen_tcpv4 stack ~port:8443 (with_tls cfg s); 
+    (*Stack.listen_tcpv4 stack ~port:8080;*)
+    Stack.listen stack
+    (*Lwt.join [
       http tls @@ D.serve (D.review_dispatcher s);
       http (`TCP 8080) @@ D.serve D.redirect;
-    ]
+    ]*)
 end
