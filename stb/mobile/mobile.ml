@@ -3,11 +3,11 @@ open V1_LWT
 open Lwt
 open Result
 
-let log_src = Logs.Src.create "ucn.stb.box"
+let log_src = Logs.Src.create "ucn.stb.mobile"
 module Log = (val Logs.src_log log_src : Logs.LOG)
 module Client = Cohttp_mirage.Client
 
-module Box_Store = struct
+module Mobile_Store = struct
 
   module S = Data_store
 
@@ -42,9 +42,7 @@ module Box_Store = struct
     match meth, steps with
     | `GET, steps ->
        let len = List.length steps in
-       if len = 0 then (* PIH discovery endpoint *)
-         return @@ Ok "<xml>true</xmd>"
-       else if len = 3 then (* it's a directory reading for yy/mm/dd *)
+       if len = 3 then (* it's a directory reading for yy/mm/dd *)
          S.list store ?src ~parent:steps () >>= function
          | Error e ->
             Log.err (fun f -> f "list %s" path);
@@ -81,23 +79,7 @@ module Box_Store = struct
 
     | `POST, steps ->
        assert (4 = List.length steps); (* entry writing for yy/mm/dd/tunetime *)
-       let dev =
-         match Cohttp.Header.get headers "UA-DeviceId" with
-         | None -> ""
-         | Some id -> id in
-       let stream = Lwt_stream.of_list [body] in
-       let content_type =
-         match Cohttp.Header.get headers "Content-Type" with
-         | None -> failwith "no Content-Type"
-         | Some typ -> typ in
-       let callback = fun ~name ~filename _ -> return_unit in
-       Multipart.parse ~stream ~content_type ~callback >>= fun lst ->
-       let v = Ezjsonm.(
-         ["dev", dev] @ lst
-         |> List.map (fun (k, v) -> k, string v)
-         |> dict
-         |> to_string) in
-
+       let v = body in
        publish ctx v >>= fun () ->
        with_ok_unit @@ S.update store ?src steps v
 
@@ -121,14 +103,14 @@ module Dispatcher
   let empty_body = Cohttp_lwt_body.empty
 
   (* TODO: get src information *)
-  let box_dispatcher (ctx, store) ?src uri req body =
+  let mobile_dispatcher (ctx, store) ?src uri req body =
     let p = Uri.path uri in
     let steps = Astring.String.cuts ~empty:false ~sep:"/" p in
     let meth = Cohttp.Request.meth req in
     let req_headers = Cohttp.Request.headers req in
     Cohttp_lwt_body.to_string body >>= fun body ->
     Log.app (fun f -> f "%s %s" (Cohttp.Code.string_of_method meth) p);
-    Box_Store.dispatch (ctx, store) ?src req_headers body meth steps
+    Mobile_Store.dispatch (ctx, store) ?src req_headers body meth steps
     >>= function
     | Ok "" -> Http.respond ~headers ~status:`OK ~body:empty_body ()
     | Ok json ->
@@ -167,20 +149,49 @@ end
 
 
 module Main
-     (Http: Cohttp_lwt.Server)
+         (*     (Http: Cohttp_lwt.Server)*)
+     (Stack:STACKV4)
      (Resolver: Resolver_lwt.S)
      (Conduit: Conduit_mirage.S)
      (Keys: KV_RO)
-     (Clock: V1.CLOCK) = struct
+     (Clock: V1.PCLOCK) = struct
 
+
+  module TLS = Tls_mirage.Make(Stack.TCPV4)
+  module Http = Cohttp_mirage.Server(Stack.TCPV4)
+  module Https = Cohttp_mirage.Server(TLS)
+  
   module X509 = Tls_mirage.X509(Keys)(Clock)
   module Logs_reporter = Mirage_logs.Make(Clock)
-  module D = Dispatcher(Http)
+  module D = Dispatcher(Https)
 
-  let time () = Clock.(
+  let with_tls tls_conf conf f =
+    TLS.server_of_flow tls_conf f >>= function
+    | `Error e ->
+       Log.err (fun f -> f "upgrade: %s" (TLS.error_message e));
+       return_unit
+    | `Eof ->
+       Log.err (fun f -> f "upgrade: EOF");
+       return_unit
+    | `Ok f ->
+       let callback (_, cid) request body =
+         let src = None in
+         let uri = Cohttp.Request.uri request in
+         let cid = Cohttp.Connection.to_string cid in
+         Log.info (fun f -> f  "[%s] serving %s." cid (Uri.to_string uri));
+         D.mobile_dispatcher conf ?src uri request body
+       in
+       let conn_closed (_,cid) =
+         let cid = Cohttp.Connection.to_string cid in
+         Log.info (fun f -> f "[%s] closing" cid);
+       in
+       let t = Https.make ~conn_closed ~callback () in
+       Https.(listen t f)
+
+  (*let time () = Clock.(
     let t = time () |> gmtime in
     Printf.sprintf "%d:%d:%d:%d:%d:%d"
-      t.tm_year t.tm_mon t.tm_mday t.tm_hour t.tm_min t.tm_sec)
+      t.tm_year t.tm_mon t.tm_mday t.tm_hour t.tm_min t.tm_sec)*)
 
   let tls_init kv =
     X509.certificate kv `Default >>= fun cert ->
@@ -190,24 +201,26 @@ module Main
   let async_hook exn =
     Log.err (fun f -> f "async hook: %s" (Printexc.to_string exn))
 
-  let start http resolver conduit keys _clock =
+  let start stack resolver conduit keys _clock =
     Lwt.async_exception_hook := async_hook;
-    Logs_reporter.(create () |> run) @@ fun () ->
 
     tls_init keys >>= fun cfg ->
 
-    let tcp = `TCP  8443 in
-    let tls = `TLS (cfg, tcp) in
+    (*let tcp = `TCP  8443 in
+    let tls = `TLS (cfg, tcp) in*)
 
     let persist_host = Key_gen.persist_host () |> Ipaddr.V4.to_string in
     let persist_port = Key_gen.persist_port () in
     let persist_uri = Uri.make ~scheme:"http" ~host:persist_host ~port:persist_port () in
 
     let ctx = Client.ctx resolver conduit in
-    Box_Store.init (resolver, conduit, persist_uri) ~time () >>= fun s ->
+    let time () = Clock.now_d_ps _clock |> Ptime.v |> Ptime.to_rfc3339 ~space:true in
+    Mobile_Store.init (resolver, conduit, persist_uri) ~time () >>= fun s ->
 
-    Lwt.pick [
-      http tls @@ D.serve (D.box_dispatcher (ctx, s));
+    Stack.listen_tcpv4 stack ~port:8443 (with_tls cfg (ctx, s)); 
+    Stack.listen stack
+    (*Lwt.pick [
+      http tls @@ D.serve (D.mobile_dispatcher (ctx, s));
       http (`TCP 8080) @@ D.serve D.redirect;
-    ]
+    ]*)
 end

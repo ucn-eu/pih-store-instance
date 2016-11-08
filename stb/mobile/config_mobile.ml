@@ -10,31 +10,32 @@ let keys = Key.[
   abstract persist_host;
   abstract persist_port; ]
 
-let stack =
+(*let stack =
   if_impl Key.is_xen
     (direct_stackv4_with_default_ipv4 (netif "0"))
     (socket_stackv4 [Ipaddr.V4.any])
 
-let https = http_server @@ conduit_direct ~tls:true stack
+let https = http_server @@ conduit_direct ~tls:true stack*)
+
+let stack = generic_stackv4 (netif "0")
 
 let resolver_impl =
   if_impl Key.is_xen (resolver_dns stack) resolver_unix_system
 
-let conduit_tls = conduit_direct ~tls:true stack
+let conduit_tls = conduit_direct stack
 
 let tls = crunch "tls"
 
 let main =
-  foreign "Box.Main"
-    (http @-> resolver @-> conduit @-> kv_ro @-> clock @-> job)
+  foreign "Mobile.Main"
+    (stackv4 @-> resolver @-> conduit @-> kv_ro @-> pclock @-> job)
 
 let () =
   let libraries = [
       "logs";
       "mirage-logs";
       "pih-store";
-      "multipart-form-data";
     ] in
-  register ~libraries ~keys "STB.Box" [
-    main $ https $ resolver_impl $ conduit_tls $ tls $ default_clock
+  register ~libraries ~keys "STB.Mobile" [
+    main $ stack $ resolver_impl $ conduit_tls $ tls $ default_posix_clock
   ]
