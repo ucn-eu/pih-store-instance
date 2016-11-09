@@ -97,7 +97,7 @@ module Wifi_Store = struct
              return_some [h]) None l
 
 
-  let persist_t ctx uri s min period =
+  (*let persist_t ctx uri s min period =
     let rec aux ?min () =
       OS.Time.sleep period >>= fun () ->
       S.export ?min s >>= function
@@ -115,7 +115,7 @@ module Wifi_Store = struct
          Log.info (fun f -> f "persist to %s: %s" (Uri.to_string uri) status);
          aux ~min:[head] ()
     in
-    aux ?min ()
+    aux ?min ()*)
 
 
   let init remote_conf ~time () =
@@ -145,7 +145,7 @@ module Dispatcher
        | `Ok bufs -> return (Ok (Cstruct.copyv bufs))
 
   (* TODO: get src information *)
-  let wifi_dispatcher fs store ?src uri req body =
+  let wifi_dispatcher (fs, store) ?src uri req body =
     let p = Uri.path uri in
     let steps = Astring.String.cuts ~empty:false ~sep:"/" p in
     let meth = Cohttp.Request.meth req in
@@ -195,21 +195,44 @@ end
 
 
 module Main
-     (Http: Cohttp_lwt.Server)
+         (*(Http: Cohttp_lwt.Server)*)
+     (Stack:STACKV4)
      (Resolver: Resolver_lwt.S)
      (Conduit: Conduit_mirage.S)
      (FS: KV_RO)
      (Keys: KV_RO)
-     (Clock: V1.CLOCK) = struct
+     (Clock: V1.PCLOCK) = struct
 
+  module TLS = Tls_mirage.Make(Stack.TCPV4)
+  module Http = Cohttp_mirage.Server(Stack.TCPV4)
+  module Https = Cohttp_mirage.Server(TLS)
+  
   module X509 = Tls_mirage.X509(Keys)(Clock)
   module Logs_reporter = Mirage_logs.Make(Clock)
-  module D = Dispatcher(Http)(FS)
+  module D = Dispatcher(Https)(FS)
 
-  let time () = Clock.(
-    let t = time () |> gmtime in
-    Printf.sprintf "%d:%d:%d:%d:%d:%d"
-      t.tm_year t.tm_mon t.tm_mday t.tm_hour t.tm_min t.tm_sec)
+  let with_tls tls_conf conf f =
+    TLS.server_of_flow tls_conf f >>= function
+    | `Error e ->
+       Log.err (fun f -> f "upgrade: %s" (TLS.error_message e));
+       return_unit
+    | `Eof ->
+       Log.err (fun f -> f "upgrade: EOF");
+       return_unit
+    | `Ok f ->
+       let callback (_, cid) request body =
+         let src = None in
+         let uri = Cohttp.Request.uri request in
+         let cid = Cohttp.Connection.to_string cid in
+         Log.info (fun f -> f  "[%s] serving %s." cid (Uri.to_string uri));
+         D.wifi_dispatcher conf ?src uri request body
+       in
+       let conn_closed (_,cid) =
+         let cid = Cohttp.Connection.to_string cid in
+         Log.info (fun f -> f "[%s] closing" cid);
+       in
+       let t = Https.make ~conn_closed ~callback () in
+       Https.(listen t f)
 
   let tls_init kv =
     X509.certificate kv `Default >>= fun cert ->
@@ -219,23 +242,26 @@ module Main
   let async_hook exn =
     Log.err (fun f -> f "async hook: %s" (Printexc.to_string exn))
 
-  let start http resolver conduit fs keys _clock =
+  let start stack resolver conduit fs keys _clock =
     Lwt.async_exception_hook := async_hook;
-    Logs_reporter.(create () |> run) @@ fun () ->
 
     tls_init keys >>= fun cfg ->
 
-    let tcp = `TCP  8443 in
-    let tls = `TLS (cfg, tcp) in
+    (*let tcp = `TCP  8443 in*)
+    (*let tls = `TLS (cfg, tcp) in*)
 
     let persist_host = Key_gen.persist_host () |> Ipaddr.V4.to_string in
     let persist_port = Key_gen.persist_port () in
     let persist_uri = Uri.make ~scheme:"http" ~host:persist_host ~port:persist_port () in
 
+    let time () = Clock.now_d_ps _clock |> Ptime.v |> Ptime.to_rfc3339 ~space:true in
     Wifi_Store.init (resolver, conduit, persist_uri) ~time () >>= fun s ->
 
-    Lwt.pick [
+    Stack.listen_tcpv4 stack ~port:8443 (with_tls cfg (fs, s)); 
+    Stack.listen stack
+    
+    (*Lwt.pick [
       http tls @@ D.serve (D.wifi_dispatcher fs s);
       http (`TCP 8080) @@ D.serve D.redirect;
-    ]
+    ]*)
 end
