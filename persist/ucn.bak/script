@@ -1,8 +1,8 @@
 #!/bin/bash -e
 
 DAEMON=/home/ucn/WorkSpace/pih-store-instance/persist/persist_server/main.native
-DIR=("ucn.gatekeeper" "ucn.bridge" "ucn.review" "ucn.stb.box" "ucn.stb.mobile")
-PORT=("20000" "20001" "20002" "20003" "20004")
+DIR=("ucn.gatekeeper" "ucn.bridge" "ucn.review" "ucn.stb.box" "ucn.stb.mobile" "wifi")
+PORT=("20000" "20001" "20002" "20003" "20004" "20005")
 
 case $1 in
 
