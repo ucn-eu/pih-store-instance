@@ -1,0 +1,10 @@
+PKG mirage
+PKG mirage-logs
+PKG cohttp.lwt
+PKG ezjsonm
+PKG astring
+PKG pih-store
+PKG mirage-xen
+
+B _build
+S .

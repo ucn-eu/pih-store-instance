@@ -4,5 +4,4 @@ log
 main.ml
 *.x*
 static*
-.merlin
 _build
